@@ -1,0 +1,17 @@
+---
+- name: Setup nginx
+  hosts: vps
+  become: true
+
+  tasks:
+    - name: Update apt cache and install NGINX (Ubuntu/Debian)
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+        update_cache: true
+
+    - name: Ensure NGINX service is started and enabled
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: true

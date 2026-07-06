@@ -1,4 +1,5 @@
-servers:
+vps:
   hosts:
     bws.ugo-ii.com:
       ansible_python_interpreter: /usr/bin/python3
+      ansible_user: ktrieu
