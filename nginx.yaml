@@ -2,6 +2,8 @@
 - name: Setup nginx
   hosts: vps
   become: true
+  vars_files:
+    - vault.yml
 
   tasks:
     - name: Update apt cache and install NGINX (Ubuntu/Debian)
