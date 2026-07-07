@@ -1,0 +1,56 @@
+- name: Deploy JLMS 
+  hosts: vps
+  vars:
+    app_name: jlms
+    git_repo: git@github.com:ktrieu/jlms.git
+    build_commands: 
+      - "npm install"
+      - "npm run build"
+    artifact_location: "_site/"
+    local_path: "./build-cache/{{ app_name }}"
+    remote_path: "{{ ansible_facts['user_dir'] }}/{{ app_name }}"
+    server_name: bws.ugo-ii.com
+    not_found_page: /404/index.html
+  vars_files:
+    - vault.yml
+
+  tasks:
+    - name: Update repository locally
+      delegate_to: localhost
+      ansible.builtin.git:
+        repo: "{{ git_repo }}"
+        dest: "{{ local_path }}"
+        version: master
+        update: yes
+      register: git_result
+    - name: Build application
+      delegate_to: localhost
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+        chdir: "{{ local_path }}"
+      loop: "{{ build_commands }}"
+      when: git_result.changed
+    - name: Upload build output
+      ansible.posix.synchronize:
+        src: "{{ local_path }}/{{ artifact_location }}"
+        dest: "{{ remote_path }}"
+      when: git_result.changed
+    - name: Add ownership to root folder
+      ansible.builtin.file:
+        path: "{{ remote_path }}"
+        mode: '750'
+      when: git_result.changed
+    - name: Deploy Nginx template to remote
+      become: true
+      ansible.builtin.template:
+        src: templates/static_nginx.j2
+        dest: "/etc/nginx/conf.d/{{ app_name }}.conf"
+      notify:
+        - Reload Nginx
+
+  handlers:
+    - name: Reload Nginx
+      become: true
+      ansible.builtin.service:
+        name: nginx
+        state: restarted

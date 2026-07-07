@@ -1,0 +1,14 @@
+server {
+  root {{ remote_path }};
+  index index.html index.htm;
+  server_name {{ server_name }};
+{% if not_found_page is defined %}
+  error_page 404 {{ not_found_page }};
+{% endif %}
+  location / {
+    try_files $uri $uri/ =404;
+  }
+
+  listen 80;
+}
+
