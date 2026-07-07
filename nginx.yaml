@@ -17,3 +17,8 @@
         name: nginx
         state: started
         enabled: true
+    - name: Add Nginx user to user group
+      ansible.builtin.user:
+        name: www-data
+        groups: "{{ ansible_user }}"
+        append: true
