@@ -1,5 +1,6 @@
 vps:
   hosts:
-    bws.ugo-ii.com:
+    bobby_web_services:
+      ansible_host: 162.223.228.126
       ansible_python_interpreter: /usr/bin/python3
       ansible_user: ktrieu
