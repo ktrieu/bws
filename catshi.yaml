@@ -1,0 +1,37 @@
+- name: Deploy Catshi 
+  hosts: vps
+  vars:
+    local_repo: "./build-cache/catshi"
+  vars_files:
+    - vault.yml
+
+  tasks:
+  - name: Update repository locally
+    delegate_to: localhost
+    ansible.builtin.git:
+      repo: "git@github.com:ktrieu/catshi.git"
+      dest: "{{ local_repo }}"
+      version: docker-compose-dev-prod-split
+      update: yes
+    register: git_result
+  - name: Start Docker services
+    delegate_to: localhost
+    community.docker.docker_compose_v2:
+      build: always
+      project_src: "{{ local_repo }}"
+      docker_host: "ssh://ktrieu@{{ ansible_host }}"
+      files:
+        - docker-compose.yml
+        - docker-compose.prod.yml
+      state: present
+    environment:
+      DATABASE_URL: "sqlite:catshi.sqlite?mode=rwc"
+      DISCORD_TOKEN: "{{ secret_discord_token }}"
+      GUILD_ID: 748228407472423015
+      SQLX_OFFLINE: true
+      API_PORT: 12001
+      FRONTEND_PORT: 12002
+    register: compose_result
+  - name: Print Docker build output
+    ansible.builtin.debug:
+      var: compose_result.actions
