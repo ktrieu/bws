@@ -1,0 +1,12 @@
+- name: Install Docker
+  hosts: vps
+  become: true
+  vars_files:
+    - vault.yml
+  
+  tasks:
+    - name: Install Docker via role
+      include_role: 
+        apply:
+          become: true
+        name: geerlingguy.docker
