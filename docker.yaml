@@ -6,6 +6,9 @@
   
   tasks:
     - name: Install Docker via role
+      vars:
+        docker_users:
+          - "{{ ansible_user }}"
       include_role: 
         apply:
           become: true
