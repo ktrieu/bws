@@ -24,14 +24,12 @@
         - docker-compose.yml
         - docker-compose.prod.yml
       state: present
+      remove_orphans: true
     environment:
-      DATABASE_URL: "sqlite:catshi.sqlite?mode=rwc"
       DISCORD_TOKEN: "{{ secret_discord_token }}"
       GUILD_ID: 748228407472423015
       SQLX_OFFLINE: true
       API_PORT: 12001
       FRONTEND_PORT: 12002
+      PROD_SQLITE_DIR: "{{ ansible_facts['user_dir'] }}/catshi/db/"
     register: compose_result
-  - name: Print Docker build output
-    ansible.builtin.debug:
-      var: compose_result.actions
