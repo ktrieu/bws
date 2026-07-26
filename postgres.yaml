@@ -29,11 +29,11 @@
         state: started
         enabled: true
 
-    - name: Restrict PostgreSQL to local connections only
+    - name: Allow all listen addresses
       become_user: postgres
       community.postgresql.postgresql_alter_system:
         param: listen_addresses
-        value: localhost
+        value: "*"
       notify: Restart PostgreSQL
 
     - name: Require SCRAM password hashing for new roles
@@ -60,6 +60,17 @@
       loop:
         - 127.0.0.1/32
         - ::1/128
+      notify: Reload PostgreSQL
+
+    - name: Allow the Docker bridge network to reach the catshi database
+      become_user: postgres
+      community.postgresql.postgresql_pg_hba:
+        dest: "{{ pg_hba_file_result.query_result[0].hba_file }}"
+        contype: host
+        address: 172.16.0.0/12
+        databases: "{{ catshi_db_name }}"
+        users: "{{ catshi_db_user }}"
+        method: scram-sha-256
       notify: Reload PostgreSQL
 
     - name: Create catshi database user
