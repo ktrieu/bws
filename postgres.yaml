@@ -1,0 +1,106 @@
+- name: Setup PostgreSQL
+  hosts: vps
+  become: true
+  vars:
+    # become_user: postgres below is a non-root become; without pipelining, Ansible
+    # uploads modules to a temp dir under the connecting user's home which the
+    # postgres user can't read, causing a "become an unprivileged user" failure.
+    ansible_pipelining: true
+    catshi_db_name: catshi
+    catshi_db_user: catshi
+    catshi_db_backup_dir: "{{ ansible_facts['user_dir'] }}/catshi/db_backups"
+    catshi_db_backup_retention_days: 14
+  vars_files:
+    - vault.yml
+
+  tasks:
+    - name: Install PostgreSQL
+      ansible.builtin.apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - python3-psycopg2
+        state: present
+        update_cache: true
+
+    - name: Ensure PostgreSQL is started and enabled
+      ansible.builtin.systemd:
+        name: postgresql
+        state: started
+        enabled: true
+
+    - name: Restrict PostgreSQL to local connections only
+      become_user: postgres
+      community.postgresql.postgresql_alter_system:
+        param: listen_addresses
+        value: localhost
+      notify: Restart PostgreSQL
+
+    - name: Require SCRAM password hashing for new roles
+      become_user: postgres
+      community.postgresql.postgresql_alter_system:
+        param: password_encryption
+        value: scram-sha-256
+
+    - name: Look up the pg_hba.conf path
+      become_user: postgres
+      community.postgresql.postgresql_query:
+        query: "SHOW hba_file"
+      register: pg_hba_file_result
+
+    - name: Require SCRAM authentication for local TCP connections
+      become_user: postgres
+      community.postgresql.postgresql_pg_hba:
+        dest: "{{ pg_hba_file_result.query_result[0].hba_file }}"
+        contype: host
+        address: "{{ item }}"
+        databases: all
+        users: all
+        method: scram-sha-256
+      loop:
+        - 127.0.0.1/32
+        - ::1/128
+      notify: Reload PostgreSQL
+
+    - name: Create catshi database user
+      become_user: postgres
+      community.postgresql.postgresql_user:
+        name: "{{ catshi_db_user }}"
+        password: "{{ secret_catshi_db_password }}"
+        state: present
+
+    - name: Create catshi database
+      become_user: postgres
+      community.postgresql.postgresql_db:
+        name: "{{ catshi_db_name }}"
+        owner: "{{ catshi_db_user }}"
+        state: present
+
+    - name: Ensure catshi database backup directory exists
+      ansible.builtin.file:
+        path: "{{ catshi_db_backup_dir }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0700'
+
+    - name: Configure daily catshi database backup
+      ansible.builtin.cron:
+        name: "Backup catshi PostgreSQL database"
+        user: postgres
+        minute: "0"
+        hour: "3"
+        job: >-
+          pg_dump {{ catshi_db_name }} | gzip > {{ catshi_db_backup_dir }}/$(date +\%Y-\%m-\%d).sql.gz
+          && find {{ catshi_db_backup_dir }} -type f -mtime +{{ catshi_db_backup_retention_days }} -delete
+
+  handlers:
+    - name: Restart PostgreSQL
+      ansible.builtin.systemd:
+        name: postgresql
+        state: restarted
+
+    - name: Reload PostgreSQL
+      ansible.builtin.systemd:
+        name: postgresql
+        state: reloaded
