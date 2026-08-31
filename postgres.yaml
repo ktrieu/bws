@@ -6,10 +6,14 @@
     # uploads modules to a temp dir under the connecting user's home which the
     # postgres user can't read, causing a "become an unprivileged user" failure.
     ansible_pipelining: true
-    catshi_db_name: catshi
-    catshi_db_user: catshi
-    catshi_db_backup_dir: "{{ ansible_facts['user_dir'] }}/catshi/db_backups"
-    catshi_db_backup_retention_days: 14
+    postgres_db_backup_retention_days: 14
+    postgres_databases:
+      - name: catshi
+        user: catshi
+        password: "{{ secret_catshi_db_password }}"
+      - name: bobbie
+        user: bobbie
+        password: "{{ secret_bobbie_db_password }}"
   vars_files:
     - vault.yml
 
@@ -62,48 +66,63 @@
         - ::1/128
       notify: Reload PostgreSQL
 
-    - name: Allow the Docker bridge network to reach the catshi database
+    - name: Allow the Docker bridge network to reach each database
       become_user: postgres
       community.postgresql.postgresql_pg_hba:
         dest: "{{ pg_hba_file_result.query_result[0].hba_file }}"
         contype: host
         address: 172.16.0.0/12
-        databases: "{{ catshi_db_name }}"
-        users: "{{ catshi_db_user }}"
+        databases: "{{ item.name }}"
+        users: "{{ item.user }}"
         method: scram-sha-256
+      loop: "{{ postgres_databases }}"
+      loop_control:
+        label: "{{ item.name }}"
       notify: Reload PostgreSQL
 
-    - name: Create catshi database user
+    - name: Create database users
       become_user: postgres
       community.postgresql.postgresql_user:
-        name: "{{ catshi_db_user }}"
-        password: "{{ secret_catshi_db_password }}"
+        name: "{{ item.user }}"
+        password: "{{ item.password }}"
         state: present
+      loop: "{{ postgres_databases }}"
+      loop_control:
+        label: "{{ item.name }}"
 
-    - name: Create catshi database
+    - name: Create databases
       become_user: postgres
       community.postgresql.postgresql_db:
-        name: "{{ catshi_db_name }}"
-        owner: "{{ catshi_db_user }}"
+        name: "{{ item.name }}"
+        owner: "{{ item.user }}"
         state: present
+      loop: "{{ postgres_databases }}"
+      loop_control:
+        label: "{{ item.name }}"
 
-    - name: Ensure catshi database backup directory exists
+    - name: Ensure database backup directories exist
       ansible.builtin.file:
-        path: "{{ catshi_db_backup_dir }}"
+        path: "{{ ansible_facts['user_dir'] }}/{{ item.name }}/db_backups"
         state: directory
         owner: postgres
         group: postgres
         mode: '0700'
+      loop: "{{ postgres_databases }}"
+      loop_control:
+        label: "{{ item.name }}"
 
-    - name: Configure daily catshi database backup
+    - name: Configure daily database backups
       ansible.builtin.cron:
-        name: "Backup catshi PostgreSQL database"
+        name: "Backup {{ item.name }} PostgreSQL database"
         user: postgres
         minute: "0"
         hour: "3"
         job: >-
-          pg_dump {{ catshi_db_name }} | gzip > {{ catshi_db_backup_dir }}/$(date +\%Y-\%m-\%d).sql.gz
-          && find {{ catshi_db_backup_dir }} -type f -mtime +{{ catshi_db_backup_retention_days }} -delete
+          pg_dump {{ item.name }} | gzip > {{ ansible_facts['user_dir'] }}/{{ item.name }}/db_backups/$(date +\%Y-\%m-\%d).sql.gz
+          && find {{ ansible_facts['user_dir'] }}/{{ item.name }}/db_backups -type f -mtime +{{ postgres_db_backup_retention_days }} -delete
+      loop: "{{ postgres_databases }}"
+      loop_control:
+        label: "{{ item.name }}"
 
   handlers:
     - name: Restart PostgreSQL
