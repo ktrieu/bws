@@ -1,0 +1,39 @@
+- name: Deploy Bobbie
+  hosts: vps
+  vars:
+    local_repo: "./build-cache/bobbie"
+    # TODO: set to Bobbie's production Discord guild ID before deploying.
+    bobbie_guild_id: 1543246534756405360
+    # Bobbie's API isn't a public endpoint (no frontend, no nginx proxy). This
+    # port only needs to be free on the VPS and distinct from catshi's 12001/12002.
+    bobbie_api_port: 12003
+  vars_files:
+    - vault.yml
+
+  tasks:
+  - name: Update repository locally
+    delegate_to: localhost
+    ansible.builtin.git:
+      repo: "git@github.com:ktrieu/bobbie.git"
+      dest: "{{ local_repo }}"
+      version: master
+      update: yes
+    register: git_result
+  - name: Start Docker services
+    delegate_to: localhost
+    community.docker.docker_compose_v2:
+      build: always
+      project_src: "{{ local_repo }}"
+      docker_host: "ssh://ktrieu@{{ ansible_host }}"
+      files:
+        - docker-compose.yml
+        - docker-compose.prod.yml
+      state: present
+      remove_orphans: true
+    environment:
+      DISCORD_TOKEN: "{{ secret_bobbie_discord_token }}"
+      GUILD_ID: "{{ bobbie_guild_id }}"
+      SQLX_OFFLINE: true
+      API_PORT: "{{ bobbie_api_port }}"
+      DATABASE_URL: "postgres://bobbie:{{ secret_bobbie_db_password }}@host.docker.internal:5432/bobbie"
+    register: compose_result
