@@ -1,7 +1,10 @@
-- name: Deploy Catshi 
+- name: Deploy Catshi
   hosts: vps
   vars:
     local_repo: "./build-cache/catshi"
+    frontend_path: "{{ local_repo }}/frontend"
+    web_server_name: catshi.fun
+    remote_web_path: "{{ ansible_facts['user_dir'] }}/catshi-web"
   vars_files:
     - vault.yml
 
@@ -14,6 +17,38 @@
       version: master
       update: yes
     register: git_result
+  - name: Install frontend dependencies
+    delegate_to: localhost
+    ansible.builtin.command:
+      cmd: pnpm install --frozen-lockfile
+      chdir: "{{ frontend_path }}"
+    when: git_result.changed
+  - name: Build frontend
+    delegate_to: localhost
+    ansible.builtin.command:
+      cmd: pnpm build
+      chdir: "{{ frontend_path }}"
+    when: git_result.changed
+  - name: Upload frontend build output
+    ansible.posix.synchronize:
+      src: "{{ frontend_path }}/dist/"
+      dest: "{{ remote_web_path }}"
+    when: git_result.changed
+  - name: Add ownership to web root folder
+    ansible.builtin.file:
+      path: "{{ remote_web_path }}"
+      mode: '750'
+    when: git_result.changed
+  - name: Deploy Nginx template for frontend
+    become: true
+    vars:
+      remote_path: "{{ remote_web_path }}"
+      server_name: "{{ web_server_name }}"
+    ansible.builtin.template:
+      src: templates/static_nginx.j2
+      dest: /etc/nginx/conf.d/catshi.conf
+    notify:
+      - Reload Nginx
   - name: Start Docker services
     delegate_to: localhost
     community.docker.docker_compose_v2:
@@ -34,3 +69,10 @@
       PROD_SQLITE_DIR: "{{ ansible_facts['user_dir'] }}/catshi/db/"
       POSTGRES_URL: "postgres://catshi:{{ secret_catshi_db_password }}@host.docker.internal:5432/catshi"
     register: compose_result
+
+  handlers:
+    - name: Reload Nginx
+      become: true
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
