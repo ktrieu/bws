@@ -9,10 +9,12 @@
     artifact_location: "_site/"
     local_path: "./build-cache/{{ app_name }}"
     remote_path: "{{ ansible_facts['user_dir'] }}/{{ app_name }}"
-    server_name: bws.ugo-ii.com
+    server_name: johnlazeez.com
     not_found_page: /404/index.html
+    enable_https: true
   vars_files:
     - vault.yml
+    - vars/certbot.yml
 
   tasks:
     - name: Update repository locally
@@ -40,6 +42,10 @@
         path: "{{ remote_path }}"
         mode: '750'
       when: git_result.changed
+    - name: Issue HTTPS certificate
+      ansible.builtin.include_tasks: tasks/certbot_issue.yml
+      vars:
+        cert_domain: "{{ server_name }}"
     - name: Deploy Nginx template to remote
       become: true
       ansible.builtin.template:
