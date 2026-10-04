@@ -1,0 +1,4 @@
+# Shared across every playbook that issues or renews a Let's Encrypt
+# certificate, so all domains on this VPS register under one contact.
+certbot_email: kevin.trieu5813@gmail.com
+certbot_venv: /opt/certbot/venv

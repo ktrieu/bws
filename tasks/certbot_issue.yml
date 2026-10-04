@@ -1,0 +1,15 @@
+# Issues a certificate for `cert_domain` via the Porkbun DNS-01 challenge,
+# if one doesn't already exist. Renewal is handled separately by the
+# certbot-renew timer set up in certbot.yaml, not by re-running this.
+- name: "Issue certificate for {{ cert_domain }}"
+  become: true
+  ansible.builtin.command:
+    cmd: >
+      certbot certonly
+      --non-interactive --agree-tos
+      -m {{ certbot_email }}
+      --authenticator dns-porkbun
+      --dns-porkbun-credentials /etc/letsencrypt/porkbun.ini
+      --dns-porkbun-propagation-seconds 60
+      -d {{ cert_domain }}
+    creates: "/etc/letsencrypt/live/{{ cert_domain }}/fullchain.pem"

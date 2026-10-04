@@ -1,0 +1,93 @@
+- name: Setup Certbot
+  hosts: vps
+  become: true
+  vars_files:
+    - vault.yml
+    - vars/certbot.yml
+
+  tasks:
+    - name: Install Python venv support
+      ansible.builtin.apt:
+        name: python3-venv
+        state: present
+        update_cache: true
+
+    - name: Create virtualenv for Certbot
+      ansible.builtin.command:
+        cmd: "python3 -m venv {{ certbot_venv }}"
+        creates: "{{ certbot_venv }}/bin/pip"
+
+    - name: Install Certbot and the Porkbun DNS plugin
+      ansible.builtin.pip:
+        name:
+          - certbot
+          - certbot-dns-porkbun
+        virtualenv: "{{ certbot_venv }}"
+        state: present
+
+    - name: Symlink Certbot onto the system PATH
+      ansible.builtin.file:
+        src: "{{ certbot_venv }}/bin/certbot"
+        dest: /usr/local/bin/certbot
+        state: link
+
+    - name: Ensure the Let's Encrypt config directory exists
+      ansible.builtin.file:
+        path: /etc/letsencrypt
+        state: directory
+        mode: '0700'
+
+    - name: Deploy Porkbun API credentials
+      ansible.builtin.copy:
+        content: |
+          dns_porkbun_key = {{ secret_porkbun_api_key }}
+          dns_porkbun_secret = {{ secret_porkbun_secret_key }}
+        dest: /etc/letsencrypt/porkbun.ini
+        mode: '0600'
+
+    - name: Ensure the renewal deploy-hook directory exists
+      ansible.builtin.file:
+        path: /etc/letsencrypt/renewal-hooks/deploy
+        state: directory
+        mode: '0755'
+
+    - name: Deploy Nginx reload hook for certificate renewal
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          systemctl reload nginx
+        dest: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+        mode: '0755'
+
+    - name: Deploy Certbot renewal systemd service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Renew Let's Encrypt certificates
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/certbot renew --quiet
+        dest: /etc/systemd/system/certbot-renew.service
+
+    - name: Deploy Certbot renewal systemd timer
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Twice-daily Let's Encrypt renewal check
+
+          [Timer]
+          OnCalendar=*-*-* 00,12:00:00
+          RandomizedDelaySec=3600
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+        dest: /etc/systemd/system/certbot-renew.timer
+
+    - name: Enable and start the Certbot renewal timer
+      ansible.builtin.systemd:
+        name: certbot-renew.timer
+        daemon_reload: true
+        state: started
+        enabled: true
