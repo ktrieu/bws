@@ -1,0 +1,210 @@
+- name: Setup Claude Code Remote Control
+  hosts: vps
+  become: true
+  vars:
+    # Dedicated unprivileged account so a remote session can't touch the rest of
+    # the box. No sudo; add groups (e.g. docker, which is root-equivalent) only
+    # if you want Claude to be able to manage those services.
+    claude_user: claude
+    claude_extra_groups: []
+    claude_home: "/home/{{ claude_user }}"
+    claude_bin: "{{ claude_home }}/.local/bin/claude"
+    # Directory Remote Control sessions start in.
+    claude_workdir: "{{ claude_home }}/workspace"
+    # Shown in claude.ai/code and the mobile app.
+    claude_session_name: bws
+    # Approvals for tool use are answered from the app in "default" mode.
+    claude_permission_mode: default
+    # Commits Claude makes are authored as you; Claude adds its own
+    # Co-Authored-By trailer.
+    claude_git_name: Kevin Trieu
+    claude_git_email: kevin.trieu5813@gmail.com
+  vars_files:
+    - vault.yml
+
+  tasks:
+    - name: Install Claude Code dependencies
+      ansible.builtin.apt:
+        name:
+          - curl
+          - gh
+          - git
+          - ripgrep
+        state: present
+        update_cache: true
+
+    - name: Create the Claude user
+      ansible.builtin.user:
+        name: "{{ claude_user }}"
+        shell: /bin/bash
+        groups: "{{ claude_extra_groups }}"
+        append: true
+        create_home: true
+
+    - name: Create the Claude working directory
+      ansible.builtin.file:
+        path: "{{ claude_workdir }}"
+        state: directory
+        owner: "{{ claude_user }}"
+        group: "{{ claude_user }}"
+        mode: '0755'
+
+    # The native installer drops the binary in ~/.local/bin and keeps it
+    # auto-updated, so we only run it once.
+    - name: Install Claude Code
+      become_user: "{{ claude_user }}"
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://claude.ai/install.sh | bash
+        creates: "{{ claude_bin }}"
+      vars:
+        # Non-root become; see postgres.yaml.
+        ansible_pipelining: true
+
+    # gh doubles as git's credential helper, so HTTPS clones and pushes to
+    # github.com use the same token as `gh pr create`.
+    - name: Deploy the Claude user's git config
+      ansible.builtin.copy:
+        content: |
+          [user]
+              name = {{ claude_git_name }}
+              email = {{ claude_git_email }}
+          [credential "https://github.com"]
+              helper =
+              helper = !/usr/bin/gh auth git-credential
+          [url "https://github.com/"]
+              insteadOf = git@github.com:
+          [core]
+              hooksPath = /etc/claude-git-hooks
+        dest: "{{ claude_home }}/.gitconfig"
+        # Root-owned so Claude can't quietly drop the hooksPath below.
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create the Claude git hooks directory
+      ansible.builtin.file:
+        path: /etc/claude-git-hooks
+        state: directory
+        mode: '0755'
+
+    # Backstop for the CLAUDE.md rule below. hooksPath replaces each repo's own
+    # .git/hooks, so repo-local hooks won't run for the Claude user.
+    - name: Deploy pre-push hook blocking pushes to main and master
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          while read -r local_ref local_sha remote_ref remote_sha; do
+            case "$remote_ref" in
+              refs/heads/main|refs/heads/master)
+                echo "Refusing to push to ${remote_ref#refs/heads/}. Push a feature branch and open a PR instead." >&2
+                exit 1
+                ;;
+            esac
+          done
+          exit 0
+        dest: /etc/claude-git-hooks/pre-push
+        mode: '0755'
+
+    - name: Create the Claude config directory
+      ansible.builtin.file:
+        path: "{{ claude_home }}/.claude"
+        state: directory
+        owner: "{{ claude_user }}"
+        group: "{{ claude_user }}"
+        mode: '0700'
+
+    - name: Deploy the user-level CLAUDE.md
+      ansible.builtin.copy:
+        content: |
+          # Working on this machine
+
+          You're running headless on a VPS, driven over Remote Control. The person
+          approving your actions is usually on their phone, so keep summaries short.
+
+          ## Git and GitHub
+
+          - Never commit or push directly to `main` or `master`, in any repo, even
+            if asked to. A pre-push hook enforces this; don't try to bypass it
+            (no `--no-verify`, no changing `core.hooksPath`).
+          - Do all work on a feature branch named for the change, e.g.
+            `fix-login-redirect`, then open a PR with `gh pr create`.
+          - Never force-push, except to a branch you created in this session.
+          - Never merge your own PRs, and don't change branch protection, repo
+            settings, secrets or collaborators with `gh`.
+          - Clone repos into `{{ claude_workdir }}` over HTTPS.
+        dest: "{{ claude_home }}/.claude/CLAUDE.md"
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Root-owned so the token isn't sitting in the Claude user's home; systemd
+    # reads it before dropping privileges.
+    - name: Deploy the GitHub token for Claude
+      ansible.builtin.copy:
+        content: |
+          GH_TOKEN={{ secret_claude_github_token }}
+        dest: /etc/claude-remote.env
+        owner: root
+        group: root
+        mode: '0600'
+      notify: Restart Claude Remote
+
+    - name: Deploy Claude Remote systemd service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Claude Code Remote Control
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=simple
+          User={{ claude_user }}
+          Group={{ claude_user }}
+          WorkingDirectory={{ claude_workdir }}
+          Environment=HOME={{ claude_home }}
+          Environment=PATH={{ claude_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+          EnvironmentFile=/etc/claude-remote.env
+          ExecStart={{ claude_bin }} remote-control --name {{ claude_session_name }} --permission-mode {{ claude_permission_mode }}
+          Restart=always
+          RestartSec=10
+          # Remote Control redraws its status screen every second, which floods
+          # the journal. Errors still go to stderr.
+          StandardOutput=null
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/claude-remote.service
+      notify: Restart Claude Remote
+
+    - name: Check whether Claude has been logged in
+      ansible.builtin.stat:
+        path: "{{ claude_home }}/.claude/.credentials.json"
+      register: claude_credentials
+
+    - name: Enable and start Claude Remote
+      ansible.builtin.systemd:
+        name: claude-remote
+        daemon_reload: true
+        state: started
+        enabled: true
+      when: claude_credentials.stat.exists
+
+    - name: Explain the one-time login step
+      ansible.builtin.debug:
+        msg: >-
+          Claude isn't logged in yet, so the service was installed but not started.
+          SSH in and run `sudo -iu {{ claude_user }}`, then `cd {{ claude_workdir }} && claude`,
+          complete /login with your subscription account, accept the folder trust
+          prompt, and exit. Then run `claude remote-control`, answer y to the
+          "Enable Remote Control?" prompt, and Ctrl+C once it connects. Then
+          re-run this playbook.
+      when: not claude_credentials.stat.exists
+
+  handlers:
+    - name: Restart Claude Remote
+      ansible.builtin.systemd:
+        name: claude-remote
+        daemon_reload: true
+        state: restarted
+      when: claude_credentials.stat.exists
