@@ -13,8 +13,9 @@
     claude_workdir: "{{ claude_home }}/workspace"
     # Shown in claude.ai/code and the mobile app.
     claude_session_name: bws
-    # Approvals for tool use are answered from the app in "default" mode.
-    claude_permission_mode: default
+    # Auto mode lets a classifier approve routine tool use, so sessions don't
+    # stall waiting on the app; risky actions still need approval.
+    claude_permission_mode: auto
     # Commits Claude makes are authored as you; Claude adds its own
     # Co-Authored-By trailer.
     claude_git_name: Kevin Trieu
