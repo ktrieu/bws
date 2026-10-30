@@ -31,6 +31,11 @@
           - gh
           - git
           - ripgrep
+          # Rust links with the system cc; most crates touching OpenSSL need
+          # pkg-config and the headers.
+          - build-essential
+          - pkg-config
+          - libssl-dev
         state: present
         update_cache: true
 
@@ -59,6 +64,33 @@
         creates: "{{ claude_bin }}"
       vars:
         # Non-root become; see postgres.yaml.
+        ansible_pipelining: true
+
+    # rustup installs into ~/.cargo and ~/.rustup, so Claude can add
+    # toolchains, components and targets itself without sudo. PATH is set in
+    # the systemd unit, which doesn't read shell profiles.
+    - name: Install Rust toolchain
+      become_user: "{{ claude_user }}"
+      ansible.builtin.shell:
+        cmd: >-
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs
+          | sh -s -- -y --profile default --no-modify-path
+        creates: "{{ claude_home }}/.cargo/bin/rustup"
+      vars:
+        # Non-root become; see postgres.yaml.
+        ansible_pipelining: true
+
+    # The install above is skipped if rustup already exists, which leaves a
+    # half-finished install without a default toolchain.
+    - name: Set the default Rust toolchain
+      become_user: "{{ claude_user }}"
+      ansible.builtin.shell:
+        cmd: >-
+          {{ claude_home }}/.cargo/bin/rustup default >/dev/null 2>&1 && echo present
+          || {{ claude_home }}/.cargo/bin/rustup default stable
+      register: rust_default
+      changed_when: rust_default.stdout != 'present'
+      vars:
         ansible_pipelining: true
 
     # gh doubles as git's credential helper, so HTTPS clones and pushes to
@@ -164,7 +196,7 @@
           Group={{ claude_user }}
           WorkingDirectory={{ claude_workdir }}
           Environment=HOME={{ claude_home }}
-          Environment=PATH={{ claude_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin
+          Environment=PATH={{ claude_home }}/.cargo/bin:{{ claude_home }}/.local/bin:/usr/local/bin:/usr/bin:/bin
           EnvironmentFile=/etc/claude-remote.env
           ExecStart={{ claude_bin }} remote-control --name {{ claude_session_name }} --permission-mode {{ claude_permission_mode }}
           Restart=always
