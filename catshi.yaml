@@ -74,6 +74,7 @@
       FRONTEND_PORT: 12002
       PROD_SQLITE_DIR: "{{ ansible_facts['user_dir'] }}/catshi/db/"
       POSTGRES_URL: "postgres://catshi:{{ secret_catshi_db_password }}@host.docker.internal:5432/catshi"
+      FRONTEND_BASE_URL: "https://catshi.fun"
     register: compose_result
 
   handlers:
