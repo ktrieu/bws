@@ -5,6 +5,7 @@
     frontend_path: "{{ local_repo }}/frontend"
     web_server_name: catshi.fun
     remote_web_path: "{{ ansible_facts['user_dir'] }}/catshi-web"
+    catshi_api_port: 12001
   vars_files:
     - vault.yml
     - vars/certbot.yml
@@ -46,12 +47,8 @@
       cert_domain: "{{ web_server_name }}"
   - name: Deploy Nginx template for frontend
     become: true
-    vars:
-      remote_path: "{{ remote_web_path }}"
-      server_name: "{{ web_server_name }}"
-      enable_https: true
     ansible.builtin.template:
-      src: templates/static_nginx.j2
+      src: templates/catshi_nginx.j2
       dest: /etc/nginx/conf.d/catshi.conf
     notify:
       - Reload Nginx
@@ -70,7 +67,7 @@
       DISCORD_TOKEN: "{{ secret_discord_token }}"
       GUILD_ID: 1339973104444768276
       SQLX_OFFLINE: true
-      API_PORT: 12001
+      API_PORT: "{{ catshi_api_port }}"
       FRONTEND_PORT: 12002
       PROD_SQLITE_DIR: "{{ ansible_facts['user_dir'] }}/catshi/db/"
       POSTGRES_URL: "postgres://catshi:{{ secret_catshi_db_password }}@host.docker.internal:5432/catshi"
