@@ -19,28 +19,37 @@
       version: master
       update: yes
     register: git_result
+  # Frontend assets are stored in Git LFS; without this the build bundles pointer files.
+  # In `git lfs ls-files`, " - " marks a file that is still only a pointer.
+  - name: Pull Git LFS objects
+    delegate_to: localhost
+    ansible.builtin.shell:
+      cmd: if git lfs ls-files | grep -q ' - '; then git lfs pull && echo pulled; fi
+      chdir: "{{ local_repo }}"
+    register: lfs_result
+    changed_when: "'pulled' in lfs_result.stdout"
   - name: Install frontend dependencies
     delegate_to: localhost
     ansible.builtin.command:
       cmd: pnpm install --frozen-lockfile
       chdir: "{{ frontend_path }}"
-    when: git_result.changed
+    when: git_result.changed or lfs_result.changed
   - name: Build frontend
     delegate_to: localhost
     ansible.builtin.command:
       cmd: pnpm build
       chdir: "{{ frontend_path }}"
-    when: git_result.changed
+    when: git_result.changed or lfs_result.changed
   - name: Upload frontend build output
     ansible.posix.synchronize:
       src: "{{ frontend_path }}/dist/"
       dest: "{{ remote_web_path }}"
-    when: git_result.changed
+    when: git_result.changed or lfs_result.changed
   - name: Add ownership to web root folder
     ansible.builtin.file:
       path: "{{ remote_web_path }}"
       mode: '750'
-    when: git_result.changed
+    when: git_result.changed or lfs_result.changed
   - name: Issue HTTPS certificate for frontend
     ansible.builtin.include_tasks: tasks/certbot_issue.yml
     vars:
