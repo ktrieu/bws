@@ -61,10 +61,28 @@
       dest: /etc/nginx/conf.d/catshi.conf
     notify:
       - Reload Nginx
+  # CI builds the images after a push, so wait until all of them exist for this commit.
+  - name: Wait for GHCR images to be published
+    delegate_to: localhost
+    ansible.builtin.shell:
+      cmd: |
+        token=$(curl -sf "https://ghcr.io/token?scope=repository:ktrieu/catshi-{{ item }}:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+        curl -sf -o /dev/null \
+          -H "Authorization: Bearer $token" \
+          -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json" \
+          "https://ghcr.io/v2/ktrieu/catshi-{{ item }}/manifests/sha-{{ git_result.after }}"
+    loop: [api, bot, purser, migrate]
+    register: image_check
+    until: image_check.rc == 0
+    retries: 40
+    delay: 30
+    changed_when: false
   - name: Start Docker services
     delegate_to: localhost
     community.docker.docker_compose_v2:
-      build: always
+      # Images are built and pushed to GHCR by catshi's GitHub Actions workflow.
+      build: never
+      pull: missing
       project_src: "{{ local_repo }}"
       docker_host: "ssh://ktrieu@{{ ansible_host }}"
       files:
@@ -75,7 +93,10 @@
     environment:
       DISCORD_TOKEN: "{{ secret_discord_token }}"
       GUILD_ID: 1339973104444768276
-      SQLX_OFFLINE: true
+      PURSER_DISCORD_TOKEN: "{{ secret_purser_discord_token }}"
+      CF_ARCHIVE_CHANNEL_ID: 1489099725897601084
+      # CI tags images with the full commit SHA, so this pins the deploy to the checked-out commit.
+      CATSHI_IMAGE_TAG: "sha-{{ git_result.after }}"
       API_PORT: "{{ catshi_api_port }}"
       FRONTEND_PORT: 12002
       PROD_SQLITE_DIR: "{{ ansible_facts['user_dir'] }}/catshi/db/"
